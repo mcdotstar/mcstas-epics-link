@@ -1,0 +1,183 @@
+/*******************************************************************************
+*
+* McStas, neutron ray-tracing package
+*         Copyright 1997-2002, All rights reserved
+*         Risoe National Laboratory, Roskilde, Denmark
+*         Institut Laue Langevin, Grenoble, France
+*
+* %I
+* Written by:  Gregory Tucker
+* Date: 2023-05-03
+* Version: $Revision$
+* Origin: ESS
+* Release: McStas 3.
+*
+* Publish named instrument parameter values to an EPICS channel at runtime
+*
+* %D
+*
+* Example: Epics()
+*
+* %P
+* INPUT PARAMETERS:
+* which [str] : list of parameter name, channel name pairs
+* put [str] : the channel-access put command name, likely "caput" or "caproto-put"
+* separator [str] : the list separator used in `which`, defaults to ' '
+* pointer [str] : the parameter name channel name separator, defaults to '>'
+* 
+******************************************************************************/
+
+DEFINE COMPONENT Epics
+DEFINITION PARAMETERS ()
+SETTING PARAMETERS (
+string which=0,
+string put=0,
+string separator=0,
+string pointer=0,
+string prefix=0
+)
+/* Neutron parameters: (x,y,z,vx,vy,vz,t,sx,sy,sz,p) */
+
+SHARE %{
+
+int epics_find_instrument_parameter_index(char * name){
+  for (int i=1; i<numipar; ++i) if (0 == strcmp(name, mcinputtable[i].name)) return i;
+  return numipar;
+}
+
+void epics_sprintf_instrument_parameter(char * buf, int i){
+  if (i >= numipar) return;
+  switch (mcinputtable[i].type) {
+  case instr_type_int: sprintf(buf, "%d", *(int *)(mcinputtable[i].par)); break;
+  case instr_type_string: sprintf(buf, "%s", *(char **)(mcinputtable[i].par)); break;
+  case instr_type_double: sprintf(buf, "%f", *(double *)(mcinputtable[i].par)); break;
+  default: printf("%s is not an instrument parameter value with type in (double, int, string)\n", mcinputtable[i].name);
+  }
+}
+
+int epics_export(char* putname, char * name, char * addr){
+  char value[1024] = {'\0'};
+  epics_sprintf_instrument_parameter(value, epics_find_instrument_parameter_index(name));
+  char * cmd = calloc(strlen(putname) + strlen(addr) + strlen(value) + 3, sizeof(char));
+  sprintf(cmd, "%s %s %s", putname, addr, value);
+  printf("System call: %s\n", cmd);
+  int retval = system(cmd);
+  free(cmd);
+  return retval / 256;  
+}
+
+void epics_export_list(char * putname, int count, char ** names, char ** addrs){
+  for (int i=0; i<count; ++i){
+    int ret = epics_export(putname, names[i], addrs[i]);
+    if (ret) {
+      printf("Exporting to EPICS returned value %d\n", ret);
+    }
+  }
+}
+
+%}
+
+DECLARE
+  %{
+  int n_spec;
+  char ** parlist;
+  char ** destlist;
+  %}
+
+INITIALIZE
+  %{
+  // Use the user-provided separators or defaults:
+  char sep;
+  char ptr;
+  sep = ((separator == 0 || separator[0] == '\0') ? ' ' : separator[0]);
+  ptr = ((pointer == 0 || pointer[0] == '\0') ? '>' : pointer[0]);
+  // Use the user-provided system binary name, or 'echo' if none provided  
+  char putname[1024];
+  if (put == 0 || put[0] == '\0') {
+      strcpy(putname, "echo");
+  } else {
+      strcpy(putname, put);
+  }
+  // Copy the specification, combining repeated separators
+  char buffer[1024];
+  int j=0;
+  for (int i=0; which[i] != '\0'; ++i){
+    if (which[i] != sep || (i > 0 && which[i-1] != sep)) buffer[j++] = which[i];
+  }
+  buffer[j] = '\0';
+  // Count the number of specifications, which is one more than the number of separators
+  n_spec = 1;
+  for (int i=0; buffer[i] != '\0'; ++i) if (buffer[i] == sep) ++n_spec;
+  // Allocate storate space for the pointers to the parameter names and their destinations
+  parlist = calloc(n_spec, sizeof(char*));
+  destlist = calloc(n_spec, sizeof(char*));
+
+  // separate the specifications:
+  char token_sep[2] = {sep, '\0'};
+  char token_ptr[2] = {ptr, '\0'};
+  char * pch;
+  pch = strtok(buffer, token_sep); // tokenize between separators in the buffer
+  int index = 0;
+  while (pch != NULL && index < n_spec) {
+    // pch is a null terminated char * pointing to the start
+    // of a {name}{ptr}{destination} pair
+    // find the pointer to the destination separator
+    char * pbr;
+    pbr = strpbrk(pch, token_ptr);
+    if (pbr == NULL) {
+      if (prefix == 0 || prefix[0] == '\0') {
+        printf("The separator %c was not found in %s (separator %c), aborting!\n", ptr, pch, sep);
+        exit(-1);
+      }
+      // No specification for where to send this value -- use the specified prefix
+      parlist[index] = calloc(strlen(pch) + 1, sizeof(char));
+      strcpy(parlist[index], pch);
+      destlist[index] = calloc(strlen(prefix) + strlen(pch) + 1, sizeof(char));
+      strcpy(destlist[index], prefix);
+      strcat(destlist[index], pch);
+    } else {
+      // Copy the parameter name, for which pbr is effectively \0
+      parlist[index] = calloc(pbr - pch + 1, sizeof(char));
+      strncpy(parlist[index], pch, pbr - pch);
+      // Copy the destination address, from pbr+1 onwards
+      destlist[index] = calloc(strlen(pch) - (pbr - pch) + 1, sizeof(char));
+      strcpy(destlist[index], pbr + 1);
+    }
+    // 
+    index++;
+    // look for the next token in buffer
+    pch = strtok(NULL, token_sep);
+  }
+  
+  // Call a method to *actually* update the EPICS channel(s)
+  epics_export_list(putname, index, parlist, destlist);
+
+  %}
+
+TRACE
+  %{
+  %}
+
+SAVE
+  %{
+  %}
+
+FINALLY
+%{
+// TODO call the EPICS updater once more for each value in case it's important to show they haven't changed between two time points?
+
+if (parlist){
+  for (int i=0; i<n_spec; ++i) free(parlist[i]);
+  free(parlist);
+}
+if (destlist) {
+  for (int i=0; i<n_spec; ++i) free(destlist[i]);
+  free(destlist);
+}
+%}
+
+MCDISPLAY
+%{
+%}
+
+END

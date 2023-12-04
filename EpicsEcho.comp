@@ -1,0 +1,117 @@
+/*******************************************************************************
+*
+* McStas, neutron ray-tracing package
+*         Copyright 1997-2002, All rights reserved
+*         Risoe National Laboratory, Roskilde, Denmark
+*         Institut Laue Langevin, Grenoble, France
+*
+* %I
+* Written by:  Gregory Tucker
+* Date: 2023-05-01
+* Version: $Revision$
+* Origin: ESS
+* Release: McStas 3.
+*
+* Echo named instrument parameter values at runtime
+*
+* %D
+*
+* Example: Echo()
+*
+* %P
+* INPUT PARAMETERS:
+* 
+******************************************************************************/
+
+DEFINE COMPONENT EpicsEcho
+DEFINITION PARAMETERS ()
+SETTING PARAMETERS (
+string which=0
+)
+/* Neutron parameters: (x,y,z,vx,vy,vz,t,sx,sy,sz,p) */
+
+SHARE %{
+
+int epicsecho_find_instrument_parameter_index(char * name){
+  for (int i=0; i<numipar; ++i) if (0 == strcmp(name, mcinputtable[i].name)) return i;
+  return numipar;
+}
+
+void epicsecho_sprintf_instrument_parameter(char * buf, int i){
+  if (i >= numipar) return;
+  switch (mcinputtable[i].type) {
+  case instr_type_int: sprintf(buf, "%d", *(int *)(mcinputtable[i].par)); break;
+  case instr_type_string: sprintf(buf, "%s", *(char **)(mcinputtable[i].par)); break;
+  case instr_type_double: sprintf(buf, "%f", *(double *)(mcinputtable[i].par)); break;
+  default: printf("%s is not an instrument parameter value with type in (double, int, string)\n", mcinputtable[i].name);
+  }
+}
+
+void epicsecho_print_python_script(int count, char ** names){
+  char fb[3072];
+  char vb[1024];
+  char pb[1024];
+  sprintf(fb, "from caproto.server import PVGroup, ioc_arg_parser, pvproperty, run\n");
+  strcat(fb, "class McIOC(PVGroup):\n");
+  for (int i=0; i<count; ++i){
+    epicsecho_sprintf_instrument_parameter(vb, epicsecho_find_instrument_parameter_index(names[i]));
+    sprintf(pb, "    %s = pvproperty(value=%s)\n", names[i], vb);
+    strcat(fb, pb);
+  }
+  strcat(fb,"\n");
+  strcat(fb,"ioc_opt, run_opt = ioc_arg_aprser(default_prefix='mcstas:')\n");
+  strcat(fb,"ioc = McIOC(**ioc_opt)\n");
+  strcat(fb,"run(ioc.pvdb, **run_opt)\n");
+
+  printf("%s\n", fb);
+}
+
+%}
+
+DECLARE
+  %{
+char ** parlist;
+  %}
+
+INITIALIZE
+  %{
+char buffer[1024];
+strcpy(buffer, which);
+int n_spaces = 0;
+for (int i=0; buffer[i] != '\0'; ++i) if (buffer[i] == ' ') ++n_spaces;
+parlist = calloc(n_spaces+1, sizeof(char*));
+
+char * pch;
+pch = strtok(buffer, " ");
+int index = 0;
+while (pch != NULL && index < n_spaces + 1) {
+  parlist[index] = calloc(strlen(pch), sizeof(char));
+  strcpy(parlist[index], pch);
+  index++;
+  pch = strtok(NULL, " ");
+}
+
+// look for each named parameter, and print its value:
+
+epicsecho_print_python_script(index, parlist);
+
+  %}
+
+TRACE
+  %{
+  %}
+
+SAVE
+  %{
+  %}
+
+FINALLY
+%{
+if (parlist) free(parlist);
+%}
+
+MCDISPLAY
+%{
+%}
+
+END

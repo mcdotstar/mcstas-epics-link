@@ -1,0 +1,224 @@
+/*******************************************************************************
+*
+* McStas, neutron ray-tracing package
+*         Copyright 1997-2002, All rights reserved
+*         Risoe National Laboratory, Roskilde, Denmark
+*         Institut Laue Langevin, Grenoble, France
+*
+* %I
+* Written by:  Gregory Tucker
+* Date: 2023-05-03
+* Version: $Revision$
+* Origin: ESS
+* Release: McStas 3.
+*
+* Publish named instrument parameter values to an EPICS channel at runtime
+*
+* %D
+*
+* Example: EpicsIndex(prefix="mcstas:", which="first_value third_value>mc:values:three", put="caproto-put")
+* Example: EpicsIndex(separator=",", pointer="/", which="one/pars.v1,two/pars.v2", put="caput")
+
+*
+* %P
+* INPUT PARAMETERS:
+* which [str] : list of parameter name, channel name pairs, if left undefined *all* parameters will be exported
+* put [str] : the channel-access put command name, likely "caput" or "caproto-put"
+* separator [str] : the list separator used in `which`, defaults to ' '
+* pointer [str] : the parameter name channel name separator, defaults to '>'
+* prefix [str] : the channel prefix used if no separator found in which, if if which is empty
+* 
+******************************************************************************/
+
+DEFINE COMPONENT EpicsIndex
+DEFINITION PARAMETERS ()
+SETTING PARAMETERS (
+string which=0,
+string put=0,
+string separator=0,
+string pointer=0,
+string prefix=0
+)
+/* Neutron parameters: (x,y,z,vx,vy,vz,t,sx,sy,sz,p) */
+
+SHARE %{
+
+struct epicsindex_parameters_struct{
+  int * indexes;
+  char ** names;
+  int count;
+};
+typedef struct epicsindex_parameters_struct epicsindex_parameters;
+
+int epicsindex_find_instrument_parameter_index(char * name, size_t name_length){
+  for (int i=1; i<numipar; ++i) if (0 == strncmp(name, mcinputtable[i].name, name_length)) return i;
+  return numipar;
+}
+
+void epicsindex_sprintf_instrument_parameter(char * buf, int i){
+  if (i >= numipar) return;
+  switch (mcinputtable[i].type) {
+  case instr_type_int: sprintf(buf, "%d", *(int *)(mcinputtable[i].par)); break;
+  case instr_type_string: sprintf(buf, "%s", *(char **)(mcinputtable[i].par)); break;
+  case instr_type_double: sprintf(buf, "%f", *(double *)(mcinputtable[i].par)); break;
+  default: printf("%s is not an instrument parameter value with type in (double, int, string)\n", mcinputtable[i].name);
+  }
+}
+
+int epicsindex_export(char* putname, int index, char * addr){
+  char value[1024] = {'\0'};
+  epicsindex_sprintf_instrument_parameter(value, index);
+  char * cmd = calloc(strlen(putname) + strlen(addr) + strlen(value) + 3, sizeof(char));
+  sprintf(cmd, "%s %s %s", putname, addr, value);
+  printf("System call: %s\n", cmd);
+  int retval = system(cmd);
+  free(cmd);
+  return retval / 256;  
+}
+
+void epicsindex_export_list(char * putname, epicsindex_parameters pars){
+  for (int i=0; i<pars.count; ++i){
+    int ret = epicsindex_export(putname, pars.indexes[i], pars.names[i]);
+    if (ret) {
+      printf("Exporting to EPICS returned value %d\n", ret);
+    }
+  }
+}
+
+
+void epicsindex_insert_i_name_at_dest_j(const char * prefix, const int i, char ** dest, const int j){
+  dest[j] = calloc(strlen(prefix) + strlen(mcinputtable[i].name) + 1, sizeof(char));
+  strcpy(dest[j], prefix);
+  strcat(dest[j], mcinputtable[i].name);
+}
+
+
+epicsindex_parameters epicsindex_parse_parameter_string(const char sep, const char ptr, const char* prefix, const char * which){
+ // Copy the specification, combining repeated separators
+  char buffer[1024];
+  int j=0;
+  for (int i=0; which[i] != '\0'; ++i){
+    if (which[i] != sep || (i > 0 && which[i-1] != sep)) buffer[j++] = which[i];
+  }
+  buffer[j] = '\0';
+  
+  // Count the number of specifications, which is one more than the number of separators
+  int n_spec = 1;
+  for (int i=0; buffer[i] != '\0'; ++i) if (buffer[i] == sep) ++n_spec;
+  // Allocate storate space for the pointers to the parameter names and their destinations
+  epicsindex_parameters pars;
+  pars.count = n_spec;
+  pars.indexes = calloc(n_spec, sizeof(int));
+  pars.names = calloc(n_spec, sizeof(char*));
+
+  // separate the specifications:
+  char token_sep[2] = {sep, '\0'};
+  char token_ptr[2] = {ptr, '\0'};
+  char * pch;
+  pch = strtok(buffer, token_sep); // tokenize between separators in the buffer
+  int index = 0;
+  while (pch != NULL && index < n_spec) {
+    // pch is a null terminated char * pointing to the start
+    // of a {name}{ptr}{destination} pair
+    // find the pointer to the destination separator
+    char * pbr;
+    pbr = strpbrk(pch, token_ptr);
+    if (pbr == NULL) {
+      if (prefix == 0 || prefix[0] == '\0') {
+        printf("The separator %c was not found in %s (separator %c), aborting!\n", ptr, pch, sep);
+        exit(-1);
+      }
+      pars.indexes[index] = epicsindex_find_instrument_parameter_index(pch, strlen(pch));
+      epicsindex_insert_i_name_at_dest_j(prefix, pars.indexes[index], pars.names, index);
+    } else {
+      // find the parameter index, using pbr as the effective \0
+      pars.indexes[index]= epicsindex_find_instrument_parameter_index(pch, pbr - pch + 1);
+      // Copy the destination address, from pbr+1 onwards
+      pars.names[index] = calloc(strlen(pch) - (pbr - pch) + 1, sizeof(char));
+      strcpy(pars.names[index], pbr + 1);
+    }
+    // 
+    index++;
+    // look for the next token in buffer
+    pch = strtok(NULL, token_sep);
+  }
+  return pars;
+}
+
+epicsindex_parameters epicsindex_all_parameters(const char * prefix){
+  if (prefix == 0 || prefix[0] == '\0') {
+    printf("Exporting all parameters *REQUIRES* the EPICS prefix to be specified!. Aborting!\n");
+    exit(-1);
+  }
+  epicsindex_parameters pars;
+  pars.count = numipar;
+  pars.indexes = calloc(numipar, sizeof(int));
+  pars.names = calloc(numipar, sizeof(char*));
+  for (int i = 0; i<numipar; ++i){
+    pars.indexes[i] = i;
+    epicsindex_insert_i_name_at_dest_j(prefix, i, pars.names, i);
+  }
+  return pars;
+}
+
+%}
+
+DECLARE
+  %{
+  epicsindex_parameters pars;
+  char * putname;
+  %}
+
+INITIALIZE
+  %{
+  // Use the user-provided separators or defaults:
+  char sep;
+  char ptr;
+  sep = ((separator == 0 || separator[0] == '\0') ? ' ' : separator[0]);
+  ptr = ((pointer == 0 || pointer[0] == '\0') ? '>' : pointer[0]);
+  // parse the provided 'which' string, or setup the destination list for all known parameters
+  int no_which = which == 0 || which[0] == '\0';
+  pars = no_which ? epicsindex_all_parameters(prefix) : epicsindex_parse_parameter_string(sep, ptr, prefix, which);
+  if (pars.indexes == NULL || pars.names == NULL) {
+    printf("Error allocating EPICS output lists!\n");
+    exit(-1);
+  }
+  // Use the user-provided system binary name, or 'echo' if none provided
+  if (put == 0 || put[0] == '\0') {
+    putname = calloc(5, sizeof(char));
+    strcpy(putname, "echo");
+  } else {
+    putname = calloc(strlen(put)+1, sizeof(char));
+    strcpy(putname, put);
+  }
+  // Call a method to *actually* update the EPICS channel(s)
+  epicsindex_export_list(putname, pars);
+  %}
+
+TRACE
+  %{
+  %}
+
+SAVE
+  %{
+  %}
+
+FINALLY
+%{
+// call the EPICS updater once more for each value in case it's important to show they haven't changed
+epicsindex_export_list(putname, pars);
+
+// free all allocated memory
+if (putname) free(putname);
+if (pars.indexes) free(pars.indexes);
+if (pars.names) {
+  for (int i=0; i<pars.count; ++i) free(pars.names[i]);
+  free(pars.names);
+}
+%}
+
+MCDISPLAY
+%{
+%}
+
+END
