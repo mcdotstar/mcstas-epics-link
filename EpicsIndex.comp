@@ -59,7 +59,15 @@ void epicsindex_sprintf_instrument_parameter(char * buf, int i){
   if (i >= numipar) return;
   switch (mcinputtable[i].type) {
   case instr_type_int: sprintf(buf, "%d", *(int *)(mcinputtable[i].par)); break;
-  case instr_type_string: sprintf(buf, "%s", *(char **)(mcinputtable[i].par)); break;
+  case instr_type_string:
+  {
+    int n_dots = 0;
+    char * this_par = *(char **)(mcinputtable[i].par);
+    for (char * p = this_par; *p; ++p) if (*p == '.') n_dots++;
+    // wrap in (printed) double and single quotes to ensure the system call preserves stringy-ness
+    sprintf(buf, (n_dots ?  "\"'%s'\"" : "%s"), this_par);
+  }
+  break;
   case instr_type_double: sprintf(buf, "%f", *(double *)(mcinputtable[i].par)); break;
   default: printf("%s is not an instrument parameter value with type in (double, int, string)\n", mcinputtable[i].name);
   }
