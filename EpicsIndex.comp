@@ -37,7 +37,8 @@ string which=0,
 string put=0,
 string separator=0,
 string pointer=0,
-string prefix=0
+string prefix=0,
+int dryrun=0
 )
 /* Neutron parameters: (x,y,z,vx,vy,vz,t,sx,sy,sz,p) */
 
@@ -200,7 +201,7 @@ INITIALIZE
     strcpy(putname, put);
   }
   // Call a method to *actually* update the EPICS channel(s)
-  epicsindex_export_list(putname, pars);
+  if (!dryrun) epicsindex_export_list(putname, pars);
   %}
 
 TRACE
@@ -214,7 +215,7 @@ SAVE
 FINALLY
 %{
 // call the EPICS updater once more for each value in case it's important to show they haven't changed
-epicsindex_export_list(putname, pars);
+if (!dryrun) epicsindex_export_list(putname, pars);
 
 // free all allocated memory
 if (putname) free(putname);
