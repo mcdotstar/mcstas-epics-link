@@ -183,34 +183,39 @@ INITIALIZE
   // Use the user-provided separators or defaults:
   char sep;
   char ptr;
+  int problem = 0;
 #if defined (USE_MPI)
 // only one node needs to send out EPICS values
 if (mpi_node_rank == 0){
+#endif
   sep = ((separator == 0 || separator[0] == '\0') ? ' ' : separator[0]);
   ptr = ((pointer == 0 || pointer[0] == '\0') ? '>' : pointer[0]);
   // parse the provided 'which' string, or setup the destination list for all known parameters
   int no_which = which == 0 || which[0] == '\0';
   pars = no_which ? epicsindex_all_parameters(prefix) : epicsindex_parse_parameter_string(sep, ptr, prefix, which);
   if (pars.indexes == NULL || pars.names == NULL) {
+    problem = 1;
+  } else {
+    // Use the user-provided system binary name, or 'echo' if none provided
+    if (put == 0 || put[0] == '\0') {
+      putname = calloc(5, sizeof(char));
+      strcpy(putname, "echo");
+    } else {
+      putname = calloc(strlen(put)+1, sizeof(char));
+      strcpy(putname, put);
+    }
+    // Call a method to *actually* update the EPICS channel(s)
+    if (!dryrun) epicsindex_export_list(putname, pars);
+  }
+#if defined (USE_MPI)
+}
+  // All nodes should wait for the sending node to finish (and be able to check if there was a problem)
+  MPI_Bcast(&problem, 1, MPI_INT_T, 0, MPI_COMM_WORLD);
+#endif
+  if (problem) {
     printf("Error allocating EPICS output lists!\n");
     exit(-1);
   }
-  // Use the user-provided system binary name, or 'echo' if none provided
-  if (put == 0 || put[0] == '\0') {
-    putname = calloc(5, sizeof(char));
-    strcpy(putname, "echo");
-  } else {
-    putname = calloc(strlen(put)+1, sizeof(char));
-    strcpy(putname, put);
-  }
-#endif
-  // Call a method to *actually* update the EPICS channel(s)
-  if (!dryrun) epicsindex_export_list(putname, pars);
-#if defined (USE_MPI)
-}
-// All nodes should wait for the sending node to finish
-MPI_Barrier(MPI_COMM_WORLD);
-#endif
   %}
 
 TRACE
