@@ -183,6 +183,9 @@ INITIALIZE
   // Use the user-provided separators or defaults:
   char sep;
   char ptr;
+#if defined (USE_MPI)
+// only one node needs to send out EPICS values
+if (mpi_node_rank == 0){
   sep = ((separator == 0 || separator[0] == '\0') ? ' ' : separator[0]);
   ptr = ((pointer == 0 || pointer[0] == '\0') ? '>' : pointer[0]);
   // parse the provided 'which' string, or setup the destination list for all known parameters
@@ -200,8 +203,14 @@ INITIALIZE
     putname = calloc(strlen(put)+1, sizeof(char));
     strcpy(putname, put);
   }
+#endif
   // Call a method to *actually* update the EPICS channel(s)
   if (!dryrun) epicsindex_export_list(putname, pars);
+#if defined (USE_MPI)
+}
+// All nodes should wait for the sending node to finish
+MPI_Barrier(MPI_COMM_WORLD);
+#endif
   %}
 
 TRACE
@@ -214,16 +223,23 @@ SAVE
 
 FINALLY
 %{
-// call the EPICS updater once more for each value in case it's important to show they haven't changed
-if (!dryrun) epicsindex_export_list(putname, pars);
-
-// free all allocated memory
-if (putname) free(putname);
-if (pars.indexes) free(pars.indexes);
-if (pars.names) {
-  for (int i=0; i<pars.count; ++i) free(pars.names[i]);
-  free(pars.names);
+#if defined (USE_MPI)
+if (mpi_node_rank == 0){
+#endif
+  // call the EPICS updater once more for each value in case it's important to show they haven't changed
+  if (!dryrun) epicsindex_export_list(putname, pars);
+  // free all allocated memory
+  if (putname) free(putname);
+  if (pars.indexes) free(pars.indexes);
+  if (pars.names) {
+    for (int i=0; i<pars.count; ++i) free(pars.names[i]);
+    free(pars.names);
+  }
+#if defined (USE_MPI)
 }
+// but all nodes should wait for it to finish
+MPI_Barrier(MPI_COMM_WORLD);
+#endif
 %}
 
 MCDISPLAY
