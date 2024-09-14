@@ -210,7 +210,7 @@ if (mpi_node_rank == 0){
 #if defined (USE_MPI)
 }
   // All nodes should wait for the sending node to finish (and be able to check if there was a problem)
-  MPI_Bcast(&problem, 1, MPI_INT_T, 0, MPI_COMM_WORLD);
+  MPI_Bcast(&problem, 1, MPI_INT, 0, MPI_COMM_WORLD);
 #endif
   if (problem) {
     printf("Error allocating EPICS output lists!\n");
