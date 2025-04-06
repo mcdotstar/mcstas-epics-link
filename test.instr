@@ -1,0 +1,9 @@
+define instrument test(
+one=1,
+two=2,
+int three=3,
+string four="for"
+)
+TRACE
+component epics = UpdateEPICS(prefix="blah:", put="echo") at (0, 0, 0) ABSOLUTE
+END
